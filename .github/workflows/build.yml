@@ -24,31 +24,32 @@ jobs:
           sed -i '/endmenu/i source "drivers/kernelsu-next/Kconfig"' drivers/Kconfig
           echo 'obj-y += kernelsu-next/' >> drivers/Makefile
           
-          # コンフィグに KernelSU を有効化する設定を追記
-          # LineageOS 21 の redbull 用 defconfig を対象とする
+          # コンフィグに KernelSU を有効化
           CONF="arch/arm64/configs/vendor/redbull_defconfig"
           if [ -f "$CONF" ]; then
             echo "CONFIG_KSU=y" >> "$CONF"
             echo "CONFIG_KSU_NEXT_RENAME_UNTRUSTED_APP=y" >> "$CONF"
           else
-            echo "Target defconfig not found, searching..."
             find arch/arm64/configs/ -name "*defconfig" -exec sh -c 'echo "CONFIG_KSU=y" >> "$1"' -- {} \;
           fi
 
       - name: ツールチェーンの取得
         run: |
-          # GitLab の認証エラーを避けるため Google 公式から直接ダウンロード
+          # Android 公式の Clang リポジトリをクローン
+          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 -b main clang-repo
+          
+          # リポジトリ内にある clang-rXXXXXX という名前のディレクトリを探して展開
           mkdir clang
-          cd clang
-          curl -LO https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r487747c.tar.gz
-          tar -xf clang-r487747c.tar.gz
+          CLANG_DIR=$(ls -d clang-repo/clang-r* | head -n 1)
+          echo "Using Clang directory: $CLANG_DIR"
+          cp -r $CLANG_DIR/* clang/
 
       - name: ビルド実行
         run: |
           cd kernel-source
+          # 独自の Clang パスを優先
           export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
           
-          # ビルドオプションの定義
           MAKE_ARGS="ARCH=arm64 \
                      O=out \
                      CC=clang \
@@ -62,10 +63,10 @@ jobs:
                      CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
                      CLANG_TRIPLE=aarch64-linux-gnu-"
 
-          # 構成ファイルの生成
+          # 構成の生成
           make $MAKE_ARGS vendor/redbull_defconfig
           
-          # ビルド開始
+          # ビルド開始 (エラーが出やすいポイント)
           make -j$(nproc --all) $MAKE_ARGS
 
       - name: 成果物のパッケージング (AnyKernel3)
@@ -73,18 +74,16 @@ jobs:
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3
           rm -rf AnyKernel3/.git
           
-          # ビルド結果の Image ファイルを AnyKernel3 ディレクトリへコピー
-          # ファイル名が Image.lz4-dtb か Image.gz か不明なためワイルドカードを使用
+          # ビルド結果の Image ファイルを探してコピー
           if ls kernel-source/out/arch/arm64/boot/Image* 1> /dev/null 2>&1; then
             cp kernel-source/out/arch/arm64/boot/Image* AnyKernel3/
-            echo "Kernel image copied."
+            echo "Kernel image found and copied."
           else
-            echo "Kernel image NOT found!"
+            echo "Kernel image NOT found! Build might have failed silently."
             exit 1
           fi
           
           cd AnyKernel3
-          # Pixel 4a 5G (bramble) 用にスクリプトを微調整
           sed -i 's/device.name1=maguro/device.name1=bramble/g' anykernel.sh
           sed -i 's/device.name2=toro/device.name2=redfin/g' anykernel.sh
           zip -r ../ksu-next-kernel.zip *
