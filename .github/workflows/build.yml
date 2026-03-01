@@ -1,0 +1,50 @@
+name: Build KernelSU Next for Pixel 4a 5G
+on:
+  workflow_dispatch: # 手動実行用
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 空き容量の確保
+        run: |
+          sudo rm -rf /usr/share/dotnet /etc/mysql /var/lib/mysql /usr/local/lib/android
+          sudo apt update && sudo apt install -y bc build-essential flex bison libssl-dev libelf-dev
+
+      - name: ソースの取得
+        run: |
+          # LineageOS のカーネルソースをクローン（最新のブランチを指定）
+          git clone --depth=1 https://github.com/LineageOS/android_kernel_google_redbull -b lineage-23.2 kernel-source
+          cd kernel-source
+          
+          # KernelSU Next の統合
+          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/main/kernel/setup.sh" | bash -
+          
+          # コンフィグの修正 (redbull_defconfig の場所は arch/arm64/configs/)
+          echo "CONFIG_KSU=y" >> arch/arm64/configs/vendor/redbull_defconfig
+
+      - name: ツールチェーンの取得
+        run: |
+          # Clang や GCC を取得する必要がある
+          # ※ ここでどのバージョンを使うべきかが「正確にはわからない」ポイント
+          mkdir clang
+          cd clang
+          curl -LO https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/master/clang-r487747c.tar.gz
+          tar -xf clang-r487747c.tar.gz
+
+      - name: ビルド実行
+        run: |
+          cd kernel-source
+          export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
+          make O=out ARCH=arm64 vendor/redbull_defconfig
+          make -j$(nproc) O=out ARCH=arm64 \
+               CC=clang \
+               CROSS_COMPILE=aarch64-linux-gnu- \
+               CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+               CLANG_TRIPLE=aarch64-linux-gnu-
+
+      - name: 成果物のアップロード
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-Image
+          path: kernel-source/out/arch/arm64/boot/Image.lz4-dtb
