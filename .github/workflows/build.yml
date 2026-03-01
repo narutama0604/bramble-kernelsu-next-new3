@@ -1,4 +1,4 @@
-name: Build KernelSU Next for Pixel 4a 5G
+name: Build Bramble KernelSU Next
 on:
   workflow_dispatch:
 
@@ -6,90 +6,37 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: 空き容量の確保
-        run: |
-          sudo rm -rf /usr/share/dotnet /etc/mysql /var/lib/mysql /usr/local/lib/android
-          sudo apt update && sudo apt install -y bc build-essential flex bison libssl-dev libelf-dev clang lld llvm git curl zip
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: ソースの取得
-        run: |
-          # 1. カーネルソースの取得
-          git clone --depth=1 https://github.com/LineageOS/android_kernel_google_redbull -b lineage-21 kernel-source
-          
-          # 2. KernelSU Next の取得 (絶対パスで指定し、サブモジュールも取得)
-          # ディレクトリ名を kernelsu-next に強制
-          git clone --recursive https://github.com/rifsxd/KernelSU-Next kernel-source/drivers/kernelsu-next
-          
-          # 3. ファイル存在確認 (ログ出力用)
-          ls -ld kernel-source/drivers/kernelsu-next || echo "Directory missing"
-          ls kernel-source/drivers/kernelsu-next/Kconfig || echo "Kconfig missing"
-
-          # 4. Kconfig と Makefile の書き換え
-          cd kernel-source
-          if [ -f "drivers/kernelsu-next/Kconfig" ]; then
-            echo "KernelSU-Next source confirmed."
-            # 末尾に追記する方式に変更（より確実）
-            echo 'source "drivers/kernelsu-next/Kconfig"' >> drivers/Kconfig
-            echo 'obj-y += kernelsu-next/' >> drivers/Makefile
-          else
-            echo "Error: KernelSU-Next source NOT found even after clone!"
-            exit 1
-          fi
-          
-          # 5. コンフィグに KernelSU を有効化
-          CONF="arch/arm64/configs/vendor/redbull_defconfig"
-          if [ -f "$CONF" ]; then
-            echo "CONFIG_KSU=y" >> "$CONF"
-            echo "CONFIG_KSU_NEXT_RENAME_UNTRUSTED_APP=y" >> "$CONF"
-          else
-            find arch/arm64/configs/ -name "*defconfig" -exec sh -c 'echo "CONFIG_KSU=y" >> "$1"' -- {} \;
-          fi
-
-      - name: ツールチェーンの取得
-        run: |
-          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 -b main clang-repo
-          mkdir clang
-          CLANG_DIR=$(ls -d clang-repo/clang-r* | head -n 1)
-          cp -r $CLANG_DIR/* clang/
-
-      - name: ビルド実行
-        run: |
-          cd kernel-source
-          export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
-          
-          MAKE_ARGS="ARCH=arm64 \
-                     O=out \
-                     CC=clang \
-                     LD=ld.lld \
-                     AR=llvm-ar \
-                     NM=llvm-nm \
-                     OBJCOPY=llvm-objcopy \
-                     OBJDUMP=llvm-objdump \
-                     STRIP=llvm-strip \
-                     CROSS_COMPILE=aarch64-linux-gnu- \
-                     CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
-                     CLANG_TRIPLE=aarch64-linux-gnu-"
-
-          make $MAKE_ARGS vendor/redbull_defconfig
-          make -j$(nproc --all) $MAKE_ARGS
-
-      - name: 成果物のパッケージング (AnyKernel3)
-        run: |
-          git clone --depth=1 https://github.com/osm0sis/AnyKernel3
-          rm -rf AnyKernel3/.git
-          if ls kernel-source/out/arch/arm64/boot/Image* 1> /dev/null 2>&1; then
-            cp kernel-source/out/arch/arm64/boot/Image* AnyKernel3/
-          else
-            echo "Kernel image NOT found!"
-            exit 1
-          fi
-          cd AnyKernel3
-          sed -i 's/device.name1=maguro/device.name1=bramble/g' anykernel.sh
-          sed -i 's/device.name2=toro/device.name2=redfin/g' anykernel.sh
-          zip -r ../ksu-next-kernel.zip *
-
-      - name: 成果物のアップロード
-        uses: actions/upload-artifact@v4
+      - name: Build Kernel
+        uses: daboynb/Android-Kernel-Build-Action@main
         with:
-          name: ksu-next-kernel-zip
-          path: ksu-next-kernel.zip
+          # LineageOS 23.2 のソース（デバイスによりURLが異なる場合があります）
+          kernel-url: https://github.com/LineageOS/android_kernel_google_msm-4.19
+          kernel-branch: lineage-23.2
+          
+          # Pixel 4a 5G (bramble) の標準設定ファイル
+          kernel-config: b3_b4_defconfig
+          
+          arch: arm64
+          # Pixel 4a 5G のカーネルイメージ名は通常 Image.gz
+          kernel-name: Image.gz
+          
+          # コンパイラ設定 (LineageOS 23.2は最新のClangが必要)
+          enable-clang: true
+          use-aosp-clang: true
+          # master-kernel-build-2024 等、ビルド時期に合わせたブランチを指定
+          aosp-clang-branch: master-kernel-build-2024
+          
+          # KernelSU Next の統合
+          enable-kernelsu: true
+          kernelsu-variant: next
+          # 必要に応じて特定のバージョンを指定
+          kernelsu-version: main
+
+          # GSI用 (Non-GKI 4.19カーネル) のための追加オプション
+          # 必要に応じて KPROBES 等を有効化するスクリプトを記述可能
+          extra-cmd: |
+            echo "CONFIG_KPROBES=y" >> arch/arm64/configs/b3_b4_defconfig
+            echo "CONFIG_KPROBE_EVENTS=y" >> arch/arm64/configs/b3_b4_defconfig
