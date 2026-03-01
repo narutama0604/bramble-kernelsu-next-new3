@@ -16,23 +16,27 @@ jobs:
           # 1. カーネルソースの取得
           git clone --depth=1 https://github.com/LineageOS/android_kernel_google_redbull -b lineage-21 kernel-source
           
-          # 2. KernelSU Next の取得 (リポジトリ名を kernelsu-next に固定)
-          cd kernel-source
-          git clone https://github.com/rifsxd/KernelSU-Next drivers/kernelsu-next
+          # 2. KernelSU Next の取得 (絶対パスで指定し、サブモジュールも取得)
+          # ディレクトリ名を kernelsu-next に強制
+          git clone --recursive https://github.com/rifsxd/KernelSU-Next kernel-source/drivers/kernelsu-next
           
-          # 3. Kconfig と Makefile の書き換え (エラー防止のためパスを再確認)
+          # 3. ファイル存在確認 (ログ出力用)
+          ls -ld kernel-source/drivers/kernelsu-next || echo "Directory missing"
+          ls kernel-source/drivers/kernelsu-next/Kconfig || echo "Kconfig missing"
+
+          # 4. Kconfig と Makefile の書き換え
+          cd kernel-source
           if [ -f "drivers/kernelsu-next/Kconfig" ]; then
-            echo "KernelSU-Next source found."
-            # Kconfig の末尾 (endmenu の前) に追加
-            sed -i '/endmenu/i source "drivers/kernelsu-next/Kconfig"' drivers/Kconfig
-            # Makefile に追加
+            echo "KernelSU-Next source confirmed."
+            # 末尾に追記する方式に変更（より確実）
+            echo 'source "drivers/kernelsu-next/Kconfig"' >> drivers/Kconfig
             echo 'obj-y += kernelsu-next/' >> drivers/Makefile
           else
-            echo "Error: KernelSU-Next source NOT found!"
+            echo "Error: KernelSU-Next source NOT found even after clone!"
             exit 1
           fi
           
-          # 4. コンフィグに KernelSU を有効化
+          # 5. コンフィグに KernelSU を有効化
           CONF="arch/arm64/configs/vendor/redbull_defconfig"
           if [ -f "$CONF" ]; then
             echo "CONFIG_KSU=y" >> "$CONF"
@@ -53,7 +57,6 @@ jobs:
           cd kernel-source
           export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
           
-          # ビルド引数
           MAKE_ARGS="ARCH=arm64 \
                      O=out \
                      CC=clang \
@@ -67,10 +70,7 @@ jobs:
                      CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
                      CLANG_TRIPLE=aarch64-linux-gnu-"
 
-          # 構成の生成
           make $MAKE_ARGS vendor/redbull_defconfig
-          
-          # 実際のコンパイル
           make -j$(nproc --all) $MAKE_ARGS
 
       - name: 成果物のパッケージング (AnyKernel3)
