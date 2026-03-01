@@ -1,6 +1,6 @@
 name: Build KernelSU Next for Pixel 4a 5G
 on:
-  workflow_dispatch: # 手動実行用
+  workflow_dispatch:
 
 jobs:
   build:
@@ -9,39 +9,52 @@ jobs:
       - name: 空き容量の確保
         run: |
           sudo rm -rf /usr/share/dotnet /etc/mysql /var/lib/mysql /usr/local/lib/android
-          sudo apt update && sudo apt install -y bc build-essential flex bison libssl-dev libelf-dev
+          sudo apt update && sudo apt install -y bc build-essential flex bison libssl-dev libelf-dev Clang lld llvm
 
       - name: ソースの取得
         run: |
-          # LineageOS のカーネルソースをクローン（最新のブランチを指定）
-          git clone --depth=1 https://github.com/LineageOS/android_kernel_google_redbull -b lineage-23.2 kernel-source
+          # 1. カーネルソースの取得
+          git clone --depth=1 https://github.com/LineageOS/android_kernel_google_redbull -b lineage-21 kernel-source
+          
+          # 2. KernelSU Next の手動統合
+          # ※ KernelSU Next の最新リポジトリ URL は rifsxd 版を想定
           cd kernel-source
+          git clone https://github.com/rifsxd/KernelSU-Next drivers/kernelsu-next
           
-          # KernelSU Next の統合
-          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/main/kernel/setup.sh" | bash -
+          # 3. Kconfig と Makefile の修正 (手動パッチ)
+          # ここでエラーが出る場合は、ファイル構成が違う可能性がある
+          sed -i '$a source "drivers/kernelsu-next/Kconfig"' drivers/Kconfig
+          echo 'obj-y += kernelsu-next/' >> drivers/Makefile
           
-          # コンフィグの修正 (redbull_defconfig の場所は arch/arm64/configs/)
+          # 4. コンフィグに KSU を追加
           echo "CONFIG_KSU=y" >> arch/arm64/configs/vendor/redbull_defconfig
 
       - name: ツールチェーンの取得
         run: |
-          # Clang や GCC を取得する必要がある
-          # ※ ここでどのバージョンを使うべきかが「正確にはわからない」ポイント
-          mkdir clang
-          cd clang
-          curl -LO https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/master/clang-r487747c.tar.gz
-          tar -xf clang-r487747c.tar.gz
+          # LineageOS 公式の Clang プリビルドをクローン (約1GB強あるので注意)
+          git clone --depth=1 https://gitlab.com/LineageOS/binaries/android_prebuilts_clang_kernel_linux-x86_clang-r487747c clang
 
       - name: ビルド実行
         run: |
           cd kernel-source
           export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
-          make O=out ARCH=arm64 vendor/redbull_defconfig
-          make -j$(nproc) O=out ARCH=arm64 \
-               CC=clang \
-               CROSS_COMPILE=aarch64-linux-gnu- \
-               CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
-               CLANG_TRIPLE=aarch64-linux-gnu-
+          
+          # ビルド引数の設定
+          args="ARCH=arm64 \
+                O=out \
+                CC=clang \
+                LD=ld.lld \
+                AR=llvm-ar \
+                NM=llvm-nm \
+                OBJCOPY=llvm-objcopy \
+                OBJDUMP=llvm-objdump \
+                STRIP=llvm-strip \
+                CROSS_COMPILE=aarch64-linux-gnu- \
+                CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+                CLANG_TRIPLE=aarch64-linux-gnu-"
+
+          make $args vendor/redbull_defconfig
+          make -j$(nproc) $args
 
       - name: 成果物のアップロード
         uses: actions/upload-artifact@v4
