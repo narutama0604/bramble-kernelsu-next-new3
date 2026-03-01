@@ -1,4 +1,4 @@
-name: Build Bramble KernelSU Next
+name: Build Pixel 4a 5G KernelSU Next
 on:
   workflow_dispatch:
 
@@ -6,37 +6,26 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
       - name: Build Kernel
-        uses: daboynb/Android-Kernel-Build-Action@main
+        uses: reiryuki/Github-Action-Android-Kernel-Builder@master
         with:
-          # LineageOS 23.2 のソース（デバイスによりURLが異なる場合があります）
-          kernel-url: https://github.com/LineageOS/android_kernel_google_msm-4.19
-          kernel-branch: lineage-23.2
-          
-          # Pixel 4a 5G (bramble) の標準設定ファイル
-          kernel-config: b3_b4_defconfig
-          
+          # LineageOS 23.2 のソース (msm-4.19)
+          kernel_url: https://github.com/LineageOS/android_kernel_google_msm-4.19
+          kernel_branch: lineage-23.2
+          config: b3_b4_defconfig
           arch: arm64
-          # Pixel 4a 5G のカーネルイメージ名は通常 Image.gz
-          kernel-name: Image.gz
           
-          # コンパイラ設定 (LineageOS 23.2は最新のClangが必要)
-          enable-clang: true
-          use-aosp-clang: true
-          # master-kernel-build-2024 等、ビルド時期に合わせたブランチを指定
-          aosp-clang-branch: master-kernel-build-2024
+          # コンパイラ設定
+          clang_url: https://googlesource.com/external/github.com/soong-blobs/clang-prebuilts-gcc-arm64-linux-x86
+          # LineageOS 23.2 (Android 16相当) の場合は、より新しいClangが必要になる場合があります
           
-          # KernelSU Next の統合
-          enable-kernelsu: true
-          kernelsu-variant: next
-          # 必要に応じて特定のバージョンを指定
-          kernelsu-version: main
-
-          # GSI用 (Non-GKI 4.19カーネル) のための追加オプション
-          # 必要に応じて KPROBES 等を有効化するスクリプトを記述可能
-          extra-cmd: |
+          # KernelSU Next の導入オプション
+          # このアクションはカスタムスクリプトを実行できるため、そこで導入します
+          extra_commands: |
+            # KernelSU Next のインストール (Non-GKI 4.19向け)
+            curl -LSs "https://raw.githubusercontent.com/rifsxd/KernelSU-Next/main/kernel/setup.sh" | bash -s main
+            
+            # GSI/KernelSUに必要な設定を追記
             echo "CONFIG_KPROBES=y" >> arch/arm64/configs/b3_b4_defconfig
             echo "CONFIG_KPROBE_EVENTS=y" >> arch/arm64/configs/b3_b4_defconfig
+            echo "CONFIG_OVERLAY_FS=y" >> arch/arm64/configs/b3_b4_defconfig
