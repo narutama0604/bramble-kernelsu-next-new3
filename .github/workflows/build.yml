@@ -9,48 +9,46 @@ jobs:
       - name: 空き容量の確保
         run: |
           sudo rm -rf /usr/share/dotnet /etc/mysql /var/lib/mysql /usr/local/lib/android
-          sudo apt update && sudo apt install -y bc build-essential flex bison libssl-dev libelf-dev clang lld llvm git
+          sudo apt update && sudo apt install -y bc build-essential flex bison libssl-dev libelf-dev clang lld llvm git curl zip
 
-      - name: ソースとツールチェーンの取得
+      - name: ソースの取得
         run: |
-          # 1. カーネルソース (LineageOS 21 / Android 14)
+          # 1. カーネルソースの取得 (LineageOS 21)
           git clone --depth=1 https://github.com/LineageOS/android_kernel_google_redbull -b lineage-21 kernel-source
           
-          # 2. KernelSU Next
+          # 2. KernelSU Next の取得と統合
           cd kernel-source
           git clone https://github.com/rifsxd/KernelSU-Next drivers/kernelsu-next
           
-          # 3. ツールチェーン (LineageOS用 Clang)
-          cd ..
-          git clone --depth=1 https://gitlab.com/LineageOS/binaries/android_prebuilts_clang_kernel_linux-x86_clang-r487747c clang
-
-      - name: カーネルへのパッチ適用
-        run: |
-          cd kernel-source
-          
-          # drivers/Kconfig の最後にある endmenu の直前に追記
+          # Kconfig と Makefile の書き換え
           sed -i '/endmenu/i source "drivers/kernelsu-next/Kconfig"' drivers/Kconfig
-          
-          # drivers/Makefile に追記
           echo 'obj-y += kernelsu-next/' >> drivers/Makefile
           
-          # コンフィグの特定と KSU 有効化
-          # LineageOS 21 の場合、通常は arch/arm64/configs/vendor/redbull_defconfig
+          # コンフィグに KernelSU を有効化する設定を追記
+          # LineageOS 21 の redbull 用 defconfig を対象とする
           CONF="arch/arm64/configs/vendor/redbull_defconfig"
           if [ -f "$CONF" ]; then
             echo "CONFIG_KSU=y" >> "$CONF"
             echo "CONFIG_KSU_NEXT_RENAME_UNTRUSTED_APP=y" >> "$CONF"
           else
-            echo "Error: $CONF not found. Searching for alternatives..."
+            echo "Target defconfig not found, searching..."
             find arch/arm64/configs/ -name "*defconfig" -exec sh -c 'echo "CONFIG_KSU=y" >> "$1"' -- {} \;
           fi
+
+      - name: ツールチェーンの取得
+        run: |
+          # GitLab の認証エラーを避けるため Google 公式から直接ダウンロード
+          mkdir clang
+          cd clang
+          curl -LO https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r487747c.tar.gz
+          tar -xf clang-r487747c.tar.gz
 
       - name: ビルド実行
         run: |
           cd kernel-source
           export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
           
-          # ビルドフラグの設定
+          # ビルドオプションの定義
           MAKE_ARGS="ARCH=arm64 \
                      O=out \
                      CC=clang \
@@ -64,20 +62,29 @@ jobs:
                      CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
                      CLANG_TRIPLE=aarch64-linux-gnu-"
 
-          # 構成の生成
+          # 構成ファイルの生成
           make $MAKE_ARGS vendor/redbull_defconfig
           
-          # コンパイル (GitHub Actionsのコア数をフル活用)
+          # ビルド開始
           make -j$(nproc --all) $MAKE_ARGS
 
       - name: 成果物のパッケージング (AnyKernel3)
         run: |
-          # Image.lz4-dtb が生成されているか確認して AnyKernel3 で固める
-          git clone https://github.com/osm0sis/AnyKernel3
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3
           rm -rf AnyKernel3/.git
-          cp kernel-source/out/arch/arm64/boot/Image.lz4-dtb AnyKernel3/
+          
+          # ビルド結果の Image ファイルを AnyKernel3 ディレクトリへコピー
+          # ファイル名が Image.lz4-dtb か Image.gz か不明なためワイルドカードを使用
+          if ls kernel-source/out/arch/arm64/boot/Image* 1> /dev/null 2>&1; then
+            cp kernel-source/out/arch/arm64/boot/Image* AnyKernel3/
+            echo "Kernel image copied."
+          else
+            echo "Kernel image NOT found!"
+            exit 1
+          fi
+          
           cd AnyKernel3
-          # Pixel 4a 5G 用に AnyKernel3 の設定を調整
+          # Pixel 4a 5G (bramble) 用にスクリプトを微調整
           sed -i 's/device.name1=maguro/device.name1=bramble/g' anykernel.sh
           sed -i 's/device.name2=toro/device.name2=redfin/g' anykernel.sh
           zip -r ../ksu-next-kernel.zip *
